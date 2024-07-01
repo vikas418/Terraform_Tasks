@@ -1,0 +1,430 @@
+## Infrastructure as a Code
+### Task Description
+- Create the following resources using terraform resource block :
+    - Create 1 VPC
+        - eg : `ninja-vpc-01`
+    - Create 4 Subnet
+        - 2 public subnet
+            - eg : `ninja-pub-sub-01/02`
+        - 2 private subnet
+            - eg : `ninja-priv-sub-01/02`
+    - Create instances in it ( bastion and private instance)
+    - Create 1 IGW
+        - eg : `ninja-igw-01`
+    - Create 1 NAT
+        - eg : `ninja-nat-01`
+    - Create 2 Route Table
+        - 1 for public subnet
+            - eg : `ninja-route-pub-01/02`
+        - 1 for private subnet
+            - eg : `ninja-route-priv-01/02`
+**Note: Make maximum use of variables and output files**
+
+##########################################################
+#                   OUTPUT/ANSWER                        #
+##########################################################
+
+
+##########################################################
+#                    main.tf                             #
+##########################################################
+
+
+#=====================================================================#
+#======================= Create VPC ==================================#
+resource "aws_vpc" "ninja-vpc" {
+  cidr_block       = var.cidr_vpc
+  instance_tenancy = var.instance_tenancy
+
+  tags = {
+    Name = var.vpc_tag
+  }
+}
+
+#=====================================================================#
+#======================= Create Subnet================================#
+
+#=> PUBLIC SUBNET
+resource "aws_subnet" "public_subnets" {
+  count = length(var.public_subnet_cidr)
+
+  vpc_id                  = aws_vpc.ninja-vpc.id
+  cidr_block              = var.public_subnet_cidr[count.index]
+  availability_zone       = element(var.aws_az, count.index % length(var.aws_az))
+  map_public_ip_on_launch = true
+  tags = {
+    Name = var.public_subnet_tag[count.index]
+  }
+}
+
+#=====================================================================#
+#=> PRIVATE SUBNET
+resource "aws_subnet" "private_subnets" {
+  count = length(var.private_subnet_cidr)
+
+  vpc_id                  = aws_vpc.ninja-vpc.id
+  cidr_block              = var.private_subnet_cidr[count.index]
+  availability_zone       = element(var.aws_az, count.index % length(var.aws_az))
+  map_public_ip_on_launch = false
+  tags = {
+    Name = var.private_subnet_tag[count.index]
+  }
+}
+
+#=====================================================================#
+#========================== Create IGW ===============================#
+resource "aws_internet_gateway" "myigw" {
+  vpc_id = aws_vpc.ninja-vpc.id
+  tags = {
+    Name = var.igw
+  }
+}
+
+#=====================================================================#
+#===================== Create NAT Gateway ============================#
+
+# Elastic IP (EIP) for NAT Gateway
+resource "aws_eip" "nat_eip" {
+  instance = null
+}
+
+resource "aws_nat_gateway" "mynat" {
+  allocation_id = aws_eip.nat_eip.id
+  subnet_id     = aws_subnet.public_subnets[0].id
+  tags = {
+    Name = var.nat
+  }
+}
+
+#=====================================================================#
+#================== Create Route Table ===============================#
+# Public Route table
+
+resource "aws_route_table" "public_route_table" {
+  vpc_id = aws_vpc.ninja-vpc.id
+  route {
+    cidr_block = var.cidr_blocks[0]
+    gateway_id = aws_internet_gateway.myigw.id
+  }
+  tags = {
+    Name = var.public_route_tag
+  }
+}
+
+# Associate Public Route Table with Public Subnets
+resource "aws_route_table_association" "public_subnet_association" {
+  count          = length(aws_subnet.public_subnets)
+  subnet_id      = aws_subnet.public_subnets[count.index].id
+  route_table_id = aws_route_table.public_route_table.id
+}
+
+#=====================================================================#
+# Private Route table
+resource "aws_route_table" "private_route_table" {
+  vpc_id = aws_vpc.ninja-vpc.id
+  route {
+    cidr_block = var.cidr_blocks[0]
+    gateway_id = aws_nat_gateway.mynat.id
+  }
+  tags = {
+    Name = var.private_route_tag
+  }
+}
+
+# Associate Private Route Table with Private Subnets
+resource "aws_route_table_association" "private_subnet_association" {
+  count          = length(aws_subnet.private_subnets)
+  subnet_id      = aws_subnet.private_subnets[count.index].id
+  route_table_id = aws_route_table.private_route_table.id
+}
+
+#=====================================================================#
+#================== Create EC2 Instance ==============================#
+
+
+resource "aws_security_group" "my_security_group" {
+  name        = "tf-sg"
+  description = "Allow TLS inbound traffic and all outbound traffic"
+  vpc_id      = aws_vpc.ninja-vpc.id
+
+  dynamic "ingress" {
+    for_each = var.ingress_ports
+
+    content {
+      from_port   = ingress.value
+      to_port     = ingress.value
+      protocol    = "tcp"
+      cidr_blocks = var.cidr_blocks
+    }
+  }
+  dynamic "egress" {
+    for_each = var.egress_ports
+
+    content {
+      from_port   = egress.value
+      to_port     = egress.value
+      protocol    = "-1"
+      cidr_blocks = var.cidr_blocks
+    }
+  }
+}
+
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"]
+}
+
+
+resource "aws_instance" "bastion-server" {
+  count                       = length(aws_subnet.public_subnets)
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public_subnets[count.index].id #subnet_id= aws_subnet.public_subnets[count.index].id
+  key_name                    = var.key
+  associate_public_ip_address = true
+  security_groups             = [aws_security_group.my_security_group.id]
+
+  tags = {
+    Name = var.public_instance_tag
+  }
+}
+
+
+resource "aws_instance" "private_instance" {
+  count                       = length(aws_subnet.private_subnets)
+  ami                         = data.aws_ami.ubuntu.id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.private_subnets[count.index].id #subnet_id= aws_subnet.private_subnets[count.index].id
+  key_name                    = var.key
+  associate_public_ip_address = false
+  security_groups             = [aws_security_group.my_security_group.id]
+
+  tags = {
+    Name = var.private_instance_tag
+  }
+}
+
+##########################################################
+#                    Variable.tf                         #
+##########################################################
+
+#=====================================================================#
+# AWS Region and Availability Zone
+#=====================================================================#
+variable "aws_region" {
+  type        = string
+  description = "AWS region name"
+  default     = "us-east-1"
+}
+
+variable "aws_az" {
+  type    = list(string)
+  default = ["us-east-1a", "us-east-1b"]
+}
+
+#=====================================================================#
+# VPC Block
+#=====================================================================#
+variable "cidr_vpc" {
+  type        = string
+  description = "CIDR block for the VPC"
+  default     = "10.0.0.0/16"
+}
+
+variable "instance_tenancy" {
+  type        = string
+  description = "Instance tenancy setting for the VPC"
+  default     = "default"
+}
+
+variable "vpc_tag" {
+  type        = string
+  description = "Name tag for the VPC"
+  default     = "ninja-vpc"
+}
+
+#=====================================================================#
+# Subnet Block
+#=====================================================================#
+
+# Private Subnet
+variable "private_subnet_cidr" {
+  description = "CIDR blocks for private subnets"
+  type        = list(string)
+  default     = ["10.0.0.0/18", "10.0.64.0/18"]
+}
+
+variable "private_subnet_tag" {
+  description = "Names for private subnets"
+  type        = list(string)
+  default     = ["ninja-priv-sub-01", "ninja-priv-sub-02"]
+}
+
+# Public Subnet
+variable "public_subnet_cidr" {
+  description = "CIDR blocks for public subnets"
+  type        = list(string)
+  default     = ["10.0.128.0/18", "10.0.192.0/18"]
+}
+
+variable "public_subnet_tag" {
+  description = "Names for public subnets"
+  type        = list(string)
+  default     = ["ninja-pub-sub-01", "ninja-pub-sub-02"]
+}
+
+#=====================================================================#
+# Internet Gateway (IGW) Block
+#=====================================================================#
+
+variable "igw" {
+  type        = string
+  description = "Name tag for the Internet Gateway (IGW)"
+  default     = "ninja-igw"
+}
+
+#=====================================================================#
+# NAT Gateway Block
+#=====================================================================#
+
+variable "nat" {
+  type        = string
+  description = "Name tag for the NAT Gateway"
+  default     = "ninja-nat"
+}
+
+#=====================================================================#
+# Route Table Block
+#=====================================================================#
+
+variable "public_route_tag" {
+  type        = string
+  description = "Name tag for the public route table"
+  default     = "ninja-route-pub"
+}
+
+variable "private_route_tag" {
+  type        = string
+  description = "Name tag for the private route table"
+  default     = "ninja-route-priv"
+}
+
+#=====================================================================#
+# Instance Block
+#=====================================================================#
+
+
+variable "ami" {
+  type        = string
+  description = "ID of AMI to launch for instances"
+  default     = "ami-0f7b55661ecbbe44c"
+}
+
+
+variable "instance_type" {
+  type        = string
+  description = "Instance type for EC2 instances"
+  default     = "t2.micro"
+}
+
+
+variable "key" {
+  type        = string
+  description = "Name of the key pair used for SSH access"
+  default     = "Vikas-Key"
+}
+
+
+
+variable "ingress_ports" {
+  description = "List of ingress ports allowed for the security group"
+  type        = list(number)
+  default     = [22, 80]
+}
+
+variable "egress_ports" {
+  description = "List of egress ports allowed for the security group"
+  type        = list(number)
+  default     = [0]
+}
+
+variable "cidr_blocks" {
+  description = "List of CIDR blocks allowed for the security group"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+# Instance Name
+variable "public_instance_tag" {
+  description = "Name tag for the public EC2 instance"
+  default     = "bastion-server"
+}
+
+variable "private_instance_tag" {
+  description = "Name tag for the private EC2 instance"
+  default     = "private-instance"
+}
+
+##########################################################
+#                    output.tf                           #
+##########################################################
+
+
+output "vpc_id" {
+  description = "ID of the created VPC"
+  value       = aws_vpc.ninja-vpc.id
+}
+
+output "public_subnet_ids" {
+  description = "IDs of the created public subnets"
+  value       = aws_subnet.public_subnets[*].id
+}
+
+output "private_subnet_ids" {
+  description = "IDs of the created private subnets"
+  value       = aws_subnet.private_subnets[*].id
+}
+
+output "igw_id" {
+  description = "ID of the created Internet Gateway (IGW)"
+  value       = aws_internet_gateway.myigw.id
+}
+
+output "nat_gateway_id" {
+  description = "ID of the created NAT Gateway"
+  value       = aws_nat_gateway.mynat.id
+}
+
+output "public_route_table_id" {
+  description = "ID of the created public route table"
+  value       = aws_route_table.public_route_table.id
+}
+
+output "private_route_table_id" {
+  description = "ID of the created private route table"
+  value       = aws_route_table.private_route_table.id
+}
+
+output "bastion_instance_ids" {
+  description = "IDs of the bastion server EC2 instances"
+  value       = aws_instance.bastion-server[*].id
+}
+
+output "private_instance_ids" {
+  description = "IDs of the private EC2 instances"
+  value       = aws_instance.private_instance[*].id
+}
+
+
