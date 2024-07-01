@@ -1,5 +1,5 @@
 
-# Assignment 01
+# Assignment 01 📘
 
 ## Infrastructure as a Code
 ### Task Description
