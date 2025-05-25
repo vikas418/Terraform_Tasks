@@ -4,8 +4,6 @@
     Run PowerShell as Administrator
     Press Windows + X → select Windows PowerShell (Admin)
 
-![Terraform Setup Screenshot](C:\Users\Hp\Desktop\Terraform\Powershell.png)
-
 ## 🍫 Install Chocolatey
     Set-ExecutionPolicy Bypass -Scope Process -Force; `
     [System.Net.ServicePointManager]::SecurityProtocol = `
@@ -17,3 +15,4 @@
 
 ## ✅ Verify Terraform Installation (in Git Bash or PowerShell)
     terraform -v
+
