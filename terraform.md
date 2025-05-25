@@ -1,9 +1,10 @@
 ## Commands to Install Terraform in Windows 
 
 1. Go to Terminal :
+~~~
     Run PowerShell as Administrator
     Press Windows + X → select Windows PowerShell (Admin)
-
+```
 2. Paste this Command to Install Chocolatey :
     Set-ExecutionPolicy Bypass -Scope Process -Force; `
     [System.Net.ServicePointManager]::SecurityProtocol = `
